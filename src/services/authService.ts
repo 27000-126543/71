@@ -22,6 +22,23 @@ function generateToken(userId: string): string {
 
 const TOKEN_KEY = "scf_auth_token";
 const USER_KEY = "scf_auth_user";
+const TOKEN_EXPIRES_MS = 7 * 24 * 60 * 60 * 1000;
+
+interface TokenEntry {
+  userId: string;
+  expiresAt: number;
+}
+
+const tokenStore = new Map<string, TokenEntry>();
+
+function cleanupExpiredTokens(): void {
+  const now = Date.now();
+  for (const [token, entry] of tokenStore.entries()) {
+    if (entry.expiresAt <= now) {
+      tokenStore.delete(token);
+    }
+  }
+}
 
 export function extractToken(tokenValue: string | undefined): string | undefined {
   return tokenValue;
@@ -32,50 +49,59 @@ export async function login(username: string, password: string): Promise<LoginRe
   const user = users[0];
 
   if (!user) {
-    return { success: false, message: "用户不存在" };
+    return { success: false, message: "账号不存在" };
   }
   if (user.password !== password) {
     return { success: false, message: "密码错误" };
   }
 
   const token = generateToken(user.id);
-  store.setCurrentUser(user.id);
+
+  cleanupExpiredTokens();
+  tokenStore.set(token, {
+    userId: user.id,
+    expiresAt: Date.now() + TOKEN_EXPIRES_MS,
+  });
 
   if (typeof window !== "undefined") {
     localStorage.setItem(TOKEN_KEY, token);
-    localStorage.setItem(USER_KEY, JSON.stringify(user));
   }
 
-  const { password: _p, ..._safeUser } = user;
+  const { password: _p, ...safeUser } = user;
   void _p;
-  return { success: true, user, token };
+  return { success: true, user: safeUser as User, token };
 }
 
-export async function logout(_token?: string): Promise<void> {
+export async function logout(token?: string): Promise<void> {
   store.setCurrentUser(undefined);
+  if (token) {
+    tokenStore.delete(token);
+  }
   if (typeof window !== "undefined") {
     localStorage.removeItem(TOKEN_KEY);
     localStorage.removeItem(USER_KEY);
   }
 }
 
-export async function getCurrentUser(_token?: string): Promise<User | undefined> {
-  const cachedId = store.getCurrentUserId();
-  if (cachedId) {
-    return store.users.get(cachedId);
+export async function getCurrentUser(token?: string): Promise<User | undefined> {
+  cleanupExpiredTokens();
+
+  if (!token) return undefined;
+
+  const entry = tokenStore.get(token);
+  if (!entry) return undefined;
+
+  if (entry.expiresAt <= Date.now()) {
+    tokenStore.delete(token);
+    return undefined;
   }
-  if (typeof window !== "undefined") {
-    const raw = localStorage.getItem(USER_KEY);
-    if (raw) {
-      try {
-        const parsed = JSON.parse(raw) as User;
-        store.setCurrentUser(parsed.id);
-        return parsed;
-      } catch {
-      }
-    }
-  }
-  return undefined;
+
+  const user = await store.users.get(entry.userId);
+  if (!user) return undefined;
+
+  const { password: _p, ...safeUser } = user;
+  void _p;
+  return safeUser as User;
 }
 
 export function getToken(): string | undefined {

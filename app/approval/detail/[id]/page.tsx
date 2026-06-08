@@ -67,6 +67,7 @@ import type {
   TransactionOrder,
   Invoice,
   RiskLevel,
+  User,
 } from "@/src/types";
 
 const alertVariantForRisk = (
@@ -89,10 +90,16 @@ export default function ApprovalDetailPage() {
   const [creditScore, setCreditScore] = React.useState<CreditScore | null>(null);
   const [orders, setOrders] = React.useState<TransactionOrder[]>([]);
   const [invoices, setInvoices] = React.useState<Invoice[]>([]);
+  const [users, setUsers] = React.useState<User[]>([]);
   const [loading, setLoading] = React.useState(true);
   const [comment, setComment] = React.useState("");
   const [countdown, setCountdown] = React.useState("");
   const [isTimeout, setIsTimeout] = React.useState(false);
+
+  const getUserById = (userId?: string) => {
+    if (!userId) return undefined;
+    return users.find((u) => u.id === userId);
+  };
 
   React.useEffect(() => {
     initializeStore();
@@ -109,14 +116,22 @@ export default function ApprovalDetailPage() {
       }
       setApplication(app);
 
-      const [wf, enterprises, scores, allOrders, allInvoices] = await Promise.all([
-        app.approvalWorkflowId
-          ? store.approvalWorkflows.get(app.approvalWorkflowId)
-          : Promise.resolve(null),
+      let wf: ApprovalWorkflow | null | undefined = null;
+      if (app.approvalWorkflowId) {
+        const wfRes = await fetch(`/api/approval/${app.approvalWorkflowId}`).then((r) => r.json());
+        if (wfRes?.success && wfRes.data) {
+          wf = wfRes.data;
+        } else {
+          wf = await store.approvalWorkflows.get(app.approvalWorkflowId);
+        }
+      }
+
+      const [enterprises, scores, allOrders, allInvoices, allUsers] = await Promise.all([
         store.enterprises.all(),
         store.creditScores.all(),
         store.orders.all(),
         store.invoices.all(),
+        store.users.all(),
       ]);
 
       setWorkflow(wf || null);
@@ -125,6 +140,7 @@ export default function ApprovalDetailPage() {
       setCreditScore(scores.find((c) => c.supplierId === app.supplierId) || null);
       setOrders(allOrders.filter((o) => app.attachedOrderIds.includes(o.id)));
       setInvoices(allInvoices.filter((i) => app.attachedInvoiceIds.includes(i.id)));
+      setUsers(allUsers);
     } finally {
       setLoading(false);
     }
@@ -153,8 +169,20 @@ export default function ApprovalDetailPage() {
     return () => clearInterval(timer);
   }, [workflow]);
 
-  const handleDecision = (decision: "approve" | "conditional" | "reject" | "escalate") => {
-    router.back();
+  const handleDecision = async (decision: "approve" | "conditional" | "reject" | "escalate") => {
+    if (!workflow) return;
+    try {
+      const apiDecision = decision === "conditional" ? "approve" : decision;
+      const res = await fetch(`/api/approval/${workflow.id}/decide`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ decision: apiDecision, comment }),
+      });
+      if (!res.ok) throw new Error("操作失败");
+      await loadData();
+    } catch (e) {
+      alert(e instanceof Error ? e.message : "操作失败");
+    }
   };
 
   if (loading) {
@@ -292,7 +320,7 @@ export default function ApprovalDetailPage() {
                           {node.name}
                         </p>
                         <p className="text-xs text-navy-400 mt-1">
-                          {userRoleText(node.requiredRole)}
+                          {getUserById(node.assigneeId)?.name || userRoleText(node.requiredRole)}
                         </p>
                         {node.decidedAt && (
                           <p className="text-xs text-navy-400 mt-1">

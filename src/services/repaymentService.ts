@@ -1,6 +1,7 @@
-import type { RepaymentRecord, CollectionCase, FinancingPlan, PaginatedResult } from "@/src/types";
+import type { RepaymentRecord, CollectionCase, FinancingPlan, PaginatedResult, FinanceApplication } from "@/src/types";
 import { store } from "@/src/data/store";
 import { PlanEngine } from "@/src/engine/PlanEngine";
+import { FinanceService } from "@/src/services/financeService";
 
 export async function getRepaymentsByApplication(
   appId: string
@@ -66,6 +67,13 @@ export async function generateRepaymentSchedule(
   return records;
 }
 
+function calculateOverdueDays(dueDate: string): number {
+  const due = new Date(dueDate);
+  const now = new Date();
+  const diffMs = now.getTime() - due.getTime();
+  return Math.max(0, Math.ceil(diffMs / (1000 * 60 * 60 * 24)));
+}
+
 export async function autoDeduct(
   repaymentId: string
 ): Promise<RepaymentRecord | undefined> {
@@ -83,9 +91,32 @@ export async function autoDeduct(
       actualPaidAmount: r.totalAmount,
     });
   }
-  return store.repayments.update(repaymentId, {
+  const overdueRecord = await store.repayments.update(repaymentId, {
     status: "overdue",
   });
+  if (overdueRecord) {
+    await FinanceService.markOverdue(r.financeApplicationId);
+    const app = await FinanceService.getById(r.financeApplicationId);
+    const existingCase = await getCollectionByApplication(r.financeApplicationId);
+    if (!existingCase && app) {
+      const overdueDays = calculateOverdueDays(r.dueDate);
+      await createCollectionCase({
+        financeApplicationId: r.financeApplicationId,
+        supplierId: app.supplierId,
+        overdueDays,
+        overdueAmount: r.totalAmount,
+        status: "new",
+        followUpRecords: [
+          {
+            time: new Date().toISOString(),
+            operator: "系统",
+            content: "还款代扣失败，生成催收工单",
+          },
+        ],
+      });
+    }
+  }
+  return overdueRecord;
 }
 
 export async function deduct(
@@ -109,31 +140,32 @@ export async function manualRepay(
 }
 
 export async function getAllCollections(): Promise<CollectionCase[]> {
+  await runDailyOverdueScan();
   return store.collections.all();
 }
 
 export async function getCollectionById(id: string): Promise<CollectionCase | undefined> {
+  await runDailyOverdueScan();
   return store.collections.get(id);
 }
 
 export async function getCollectionByApplication(
   appId: string
 ): Promise<CollectionCase | undefined> {
+  await runDailyOverdueScan();
   return store.collections.getByApplication(appId);
 }
 
 export async function getCollectionsByAssignee(userId: string): Promise<CollectionCase[]> {
+  await runDailyOverdueScan();
   return store.collections.filter((c) => c.assignedTo === userId);
 }
 
 export async function getActiveCollections(): Promise<CollectionCase[]> {
+  await runDailyOverdueScan();
   return store.collections.filter(
     (c) =>
-      c.status === "new" ||
-      c.status === "contacted" ||
-      c.status === "promise_to_pay" ||
-      c.status === "escalated" ||
-      c.status === "legal_proceeding"
+      ["new", "contacted", "promise_to_pay", "escalated", "legal_proceeding"].includes(c.status)
   );
 }
 
@@ -235,6 +267,52 @@ export async function assignCollection(
   return store.collections.update(caseId, { assignedTo: userId });
 }
 
+export async function runDailyOverdueScan(): Promise<{ updated: number }> {
+  const allCases = await store.collections.all();
+  const activeCases = allCases.filter(
+    (c) => !["closed", "written_off", "legal_proceeding"].includes(c.status)
+  );
+  let updatedCount = 0;
+  const now = new Date();
+
+  for (const c of activeCases) {
+    const repayments = await store.repayments.filter(
+      (r) => r.financeApplicationId === c.financeApplicationId
+    );
+    if (repayments.length === 0) continue;
+
+    const earliestDue = repayments.reduce(
+      (earliest, r) => (r.dueDate < earliest ? r.dueDate : earliest),
+      repayments[0].dueDate
+    );
+    const overdueDays = calculateOverdueDays(earliestDue);
+
+    if (overdueDays > 90) {
+      const alreadyHasLegalNote = c.followUpRecords.some(
+        (r) => r.content.includes("启动法律程序") || r.content.includes("法律程序")
+      );
+      if (alreadyHasLegalNote) {
+        await store.collections.update(c.id, { status: "legal_proceeding" });
+      } else {
+        await store.collections.update(c.id, {
+          status: "legal_proceeding",
+          followUpRecords: [
+            ...c.followUpRecords,
+            {
+              time: now.toISOString(),
+              operator: "系统",
+              content: "逾期超过90天，自动启动法律程序",
+            },
+          ],
+        });
+      }
+      updatedCount++;
+      await FinanceService.update(c.financeApplicationId, { status: "write_off" });
+    }
+  }
+  return { updated: updatedCount };
+}
+
 export const RepaymentService = {
   byApplication: getRepaymentsByApplication,
   allRepayments: getAllRepayments,
@@ -255,6 +333,7 @@ export const RepaymentService = {
   updateStatus: updateCollectionStatus,
   assign: assignCollection,
   list,
+  runDailyOverdueScan,
 };
 
 export default RepaymentService;

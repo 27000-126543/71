@@ -167,16 +167,41 @@ export default function RepaymentCollectionPage() {
     setDrawerOpen(true);
   };
 
-  const addFollowUp = () => {
-    if (!newNote.trim()) return;
-    const record: FollowUpRecord = {
-      time: new Date().toISOString(),
-      operator: "当前操作员",
-      content: newNote,
-      status: nextStatus,
-    };
-    setFollowUps((prev) => [...prev, record]);
-    setNewNote("");
+  const addFollowUp = async () => {
+    if (!newNote.trim() || !selected) return;
+    try {
+      const res = await fetch(`/api/repayment/collection/${selected.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status: nextStatus, note: newNote }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        const record: FollowUpRecord = {
+          time: new Date().toISOString(),
+          operator: "当前操作员",
+          content: newNote,
+          status: nextStatus,
+        };
+        setFollowUps((prev) => [...prev, record]);
+        setSelected({ ...selected, status: nextStatus });
+        setCases((prev) =>
+          prev.map((c) => (c.id === selected.id ? { ...c, status: nextStatus } : c))
+        );
+        setNewNote("");
+      } else {
+        alert(data.message || "操作失败");
+      }
+    } catch (error) {
+      alert("网络错误，请稍后重试");
+    }
+  };
+
+  const handleStartLegalProceeding = async () => {
+    if (!selected) return;
+    setNextStatus("legal_proceeding");
+    setNewNote("已启动法律催收程序，移交法务部门处理");
+    await addFollowUp();
   };
 
   const needsLegalAction = selected && selected.overdueDays > 90;
@@ -584,19 +609,16 @@ export default function RepaymentCollectionPage() {
                       placeholder="请输入跟进内容，如：电话沟通情况、还款承诺等..."
                     />
                     <div className="flex justify-between items-center">
-                      {needsLegalAction && (
+                      {(needsLegalAction || (selected && selected.status !== "legal_proceeding" && selected.status !== "closed" && selected.status !== "written_off")) && selected && selected.overdueDays > 0 && (
                         <Button
-                          variant="destructive"
+                          variant={selected.status === "legal_proceeding" ? "default" : "destructive"}
                           size="lg"
-                          className="animate-pulse-glow"
-                          onClick={() => {
-                            setNextStatus("legal_proceeding");
-                            setNewNote("已启动法律催收程序，移交法务部门处理");
-                            addFollowUp();
-                          }}
+                          className={selected.status !== "legal_proceeding" && selected.overdueDays > 90 ? "animate-pulse-glow" : ""}
+                          onClick={handleStartLegalProceeding}
+                          disabled={selected.status === "legal_proceeding"}
                         >
                           <Gavel className="w-4 h-4 mr-1" />
-                          启动法律程序
+                          {selected.status === "legal_proceeding" ? "已进入法律程序" : "启动法律程序"}
                         </Button>
                       )}
                       <div className="flex gap-2 ml-auto">

@@ -242,6 +242,9 @@ export interface DashboardStats {
   totalOutstanding: number;
   totalFinancingCount: number;
   creditUtilizationRate: number;
+  totalCreditLimit: number;
+  usedCreditLimit: number;
+  availableCreditLimit: number;
   overdueRate: number;
   nonPerformingRate: number;
   totalInterestIncome: number;

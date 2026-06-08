@@ -9,6 +9,7 @@ import { Input } from "@/src/components/ui/input";
 import { Label } from "@/src/components/ui/label";
 import { Textarea } from "@/src/components/ui/textarea";
 import { Separator } from "@/src/components/ui/separator";
+import { Alert, AlertDescription, AlertTitle } from "@/src/components/ui/alert";
 import {
   CheckCircle2,
   ArrowLeft,
@@ -27,6 +28,7 @@ import {
   Sparkles,
   Clock,
   ArrowUpRight,
+  Loader2,
 } from "lucide-react";
 import { useAuth } from "@/src/context/AuthContext";
 import { store } from "@/src/data/store";
@@ -36,6 +38,7 @@ import type {
   Invoice,
   FinancingPlan,
   RepaymentMethod,
+  FinanceApplication,
 } from "@/src/types";
 import { formatCurrency, formatDate } from "@/src/lib/utils";
 
@@ -60,7 +63,11 @@ export default function FinanceApplyPage() {
   const { user } = useAuth();
   const [step, setStep] = useState(1);
   const [submitted, setSubmitted] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
   const [applicationNo, setApplicationNo] = useState("");
+  const [approvalWorkflowId, setApprovalWorkflowId] = useState("");
+  const [submitError, setSubmitError] = useState<string | null>(null);
+  const [applicationData, setApplicationData] = useState<FinanceApplication | null>(null);
 
   const [creditScore, setCreditScore] = useState<CreditScore | null>(null);
   const [orders, setOrders] = useState<SelectedOrder[]>([]);
@@ -177,12 +184,59 @@ export default function FinanceApplyPage() {
     }
   };
 
-  const handleSubmit = () => {
-    const prefix = "FA";
-    const date = new Date();
-    const no = `${prefix}${date.getFullYear()}${(date.getMonth() + 1).toString().padStart(2, "0")}${date.getDate().toString().padStart(2, "0")}${Math.floor(Math.random() * 10000).toString().padStart(4, "0")}`;
-    setApplicationNo(no);
-    setSubmitted(true);
+  const handleSubmit = async () => {
+    setSubmitting(true);
+    setSubmitError(null);
+
+    const selectedOrderIds = orders.filter((o) => o.selected).map((o) => o.id);
+    const invoiceIds: string[] = [];
+    for (const inv of invoices) {
+      const existing = await store.invoices.get(inv.id);
+      if (existing) {
+        invoiceIds.push(inv.id);
+      } else {
+        const created = await store.invoices.create(inv);
+        invoiceIds.push(created.id);
+      }
+    }
+
+    try {
+      const res = await fetch("/api/finance/apply", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          supplierId: user?.enterpriseId,
+          coreEnterpriseId: "ce_001",
+          amount,
+          termDays,
+          purpose,
+          attachedInvoiceIds: invoiceIds,
+          attachedOrderIds: selectedOrderIds,
+          selectedPlanId,
+          managerId: user?.id,
+        }),
+      });
+
+      const data = await res.json();
+      if (!data.success) {
+        setSubmitError(data.message || "提交失败");
+        if (data.application) {
+          setApplicationData(data.application);
+        }
+        return;
+      }
+
+      if (data.data) {
+        setApplicationData(data.data);
+        setApplicationNo(data.data.applicationNo);
+        setApprovalWorkflowId(data.data.approvalWorkflowId || "");
+      }
+      setSubmitted(true);
+    } catch (err) {
+      setSubmitError(err instanceof Error ? err.message : "提交失败，请稍后重试");
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   if (submitted) {
@@ -195,7 +249,7 @@ export default function FinanceApplyPage() {
                 <CheckCircle2 className="w-12 h-12 text-status-success" />
               </div>
               <h2 className="text-2xl font-bold text-navy-600 mb-2">融资申请已提交成功</h2>
-              <p className="text-navy-400 mb-6">系统已为您生成融资方案，等待审批中</p>
+              <p className="text-navy-400 mb-6">系统已完成验真、生成融资方案并创建审批流程</p>
               <div className="p-5 rounded-xl bg-navy-50 border border-navy-100 text-left space-y-3 mb-6">
                 <div className="flex justify-between">
                   <span className="text-navy-500">申请编号</span>
@@ -208,6 +262,20 @@ export default function FinanceApplyPage() {
                 <div className="flex justify-between">
                   <span className="text-navy-500">融资期限</span>
                   <span className="font-semibold text-navy-700">{termDays} 天</span>
+                </div>
+                {approvalWorkflowId && (
+                  <div className="flex justify-between items-center">
+                    <span className="text-navy-500 flex items-center gap-1">
+                      <FileText className="w-4 h-4" /> 审批流程编号
+                    </span>
+                    <span className="font-mono font-semibold text-navy-700">{approvalWorkflowId}</span>
+                  </div>
+                )}
+                <div className="flex justify-between items-center">
+                  <span className="text-navy-500 flex items-center gap-1">
+                    <Clock className="w-4 h-4" /> 当前审批节点
+                  </span>
+                  <Badge variant="warning">客户经理审核</Badge>
                 </div>
                 <div className="flex justify-between items-center">
                   <span className="text-navy-500 flex items-center gap-1">
@@ -658,6 +726,14 @@ export default function FinanceApplyPage() {
                   <CardTitle className="text-center">请确认融资申请信息</CardTitle>
                 </CardHeader>
 
+                {submitError && (
+                  <Alert variant="danger">
+                    <AlertCircle className="w-4 h-4" />
+                    <AlertTitle>提交失败</AlertTitle>
+                    <AlertDescription>{submitError}</AlertDescription>
+                  </Alert>
+                )}
+
                 <div className="space-y-4">
                   <h4 className="font-semibold text-navy-700 flex items-center gap-2">
                     <DollarSign className="w-4 h-4 text-gold-500" /> 基础信息
@@ -776,9 +852,18 @@ export default function FinanceApplyPage() {
                 <ArrowRight className="w-4 h-4 ml-1" />
               </Button>
             ) : (
-              <Button variant="gold" onClick={handleSubmit} disabled={!canProceed()}>
-                <ShieldCheck className="w-4 h-4 mr-1" />
-                确认提交申请
+              <Button variant="gold" onClick={handleSubmit} disabled={!canProceed() || submitting}>
+                {submitting ? (
+                  <>
+                    <Loader2 className="w-4 h-4 mr-1 animate-spin" />
+                    提交中...
+                  </>
+                ) : (
+                  <>
+                    <ShieldCheck className="w-4 h-4 mr-1" />
+                    确认提交申请
+                  </>
+                )}
               </Button>
             )}
           </CardFooter>

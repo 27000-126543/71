@@ -19,8 +19,10 @@ export async function GET(request: NextRequest) {
       );
     }
 
+    const { password: _p, ...safeUser } = (user || {}) as any;
+    void _p;
     return NextResponse.json(
-      { success: true, data: user },
+      { success: true, data: safeUser },
       { status: 200 }
     );
   } catch (error) {

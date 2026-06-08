@@ -1,6 +1,7 @@
 import type { ApprovalWorkflow, UserRole, PaginatedResult } from "@/src/types";
 import { store } from "@/src/data/store";
 import { ApprovalEngine, type ApprovalRouteInput } from "@/src/engine/ApprovalEngine";
+import { FinanceService } from "@/src/services/financeService";
 
 export async function getWorkflowById(id: string): Promise<ApprovalWorkflow | undefined> {
   return store.approvalWorkflows.get(id);
@@ -34,6 +35,14 @@ export async function processTimeout(workflowId: string): Promise<ApprovalWorkfl
   return store.approvalWorkflows.update(workflowId, updated);
 }
 
+async function syncFinanceStatus(workflow: ApprovalWorkflow) {
+  if (workflow.status === "approved") {
+    await FinanceService.approve(workflow.financeApplicationId);
+  } else if (workflow.status === "rejected") {
+    await FinanceService.reject(workflow.financeApplicationId);
+  }
+}
+
 export async function decideNode(
   workflowId: string,
   nodeIndex: number,
@@ -44,7 +53,11 @@ export async function decideNode(
   const wf = await store.approvalWorkflows.get(workflowId);
   if (!wf) return undefined;
   const updated = ApprovalEngine.decide(wf, nodeIndex, decision, comment, userId);
-  return store.approvalWorkflows.update(workflowId, updated);
+  const saved = await store.approvalWorkflows.update(workflowId, updated);
+  if (saved) {
+    await syncFinanceStatus(saved);
+  }
+  return saved;
 }
 
 export async function decide(

@@ -1,8 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
-import { FinanceService } from "@/src/services/financeService";
+import { RepaymentService } from "@/src/services/repaymentService";
 import { AuthService } from "@/src/services/authService";
 
-export async function POST(request: NextRequest) {
+export async function PATCH(
+  request: NextRequest,
+  { params }: { params: { id: string } }
+) {
   try {
     const token = AuthService.extractToken(request.cookies.get("auth_token")?.value);
     if (!token) {
@@ -14,23 +17,35 @@ export async function POST(request: NextRequest) {
     }
 
     const body = await request.json();
-    const finance = await FinanceService.apply(body);
+    const { status, note } = body;
 
-    const result = await FinanceService.submitFullWorkflow(finance.id);
-
-    if (!result.success) {
+    if (!status) {
       return NextResponse.json(
-        { success: false, message: result.message, applicationId: finance.id, application: finance },
+        { success: false, message: "缺少 status 参数" },
         { status: 400 }
       );
     }
 
+    const updated = await RepaymentService.updateStatus(
+      params.id,
+      status,
+      user.name,
+      note
+    );
+
+    if (!updated) {
+      return NextResponse.json(
+        { success: false, message: "催收工单不存在" },
+        { status: 404 }
+      );
+    }
+
     return NextResponse.json(
-      { success: true, message: "融资申请提交成功", data: result.application },
+      { success: true, message: "更新成功", data: updated },
       { status: 200 }
     );
   } catch (error) {
-    const message = error instanceof Error ? error.message : "融资申请提交失败";
+    const message = error instanceof Error ? error.message : "更新失败";
     return NextResponse.json(
       { success: false, message },
       { status: 500 }

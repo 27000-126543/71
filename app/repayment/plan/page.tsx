@@ -145,6 +145,23 @@ export default function RepaymentPlanPage() {
     );
   };
 
+  const handleDeduct = async (id: string) => {
+    try {
+      const res = await fetch(`/api/repayment/${id}/deduct`, {
+        method: "POST",
+      });
+      const data = await res.json();
+      if (data.success) {
+        alert(data.data?.status === "paid" ? "划扣成功！" : "划扣失败，已生成催收工单");
+        await loadData();
+      } else {
+        alert(data.message || "划扣失败");
+      }
+    } catch (error) {
+      alert("网络错误，请稍后重试");
+    }
+  };
+
   return (
     <AppLayout>
       <div className="space-y-6 animate-fade-in">
@@ -296,10 +313,23 @@ export default function RepaymentPlanPage() {
                         </button>
                       </TableCell>
                       <TableCell className="text-right">
-                        <Button variant="ghost" size="sm" onClick={() => openDetail(plan)}>
-                          <Eye className="w-3.5 h-3.5 mr-1" />
-                          详情
-                        </Button>
+                        <div className="flex items-center justify-end gap-1">
+                          {(plan.status === "pending" || plan.status === "auto_deducting") && (
+                            <Button
+                              variant="default"
+                              size="sm"
+                              onClick={() => handleDeduct(plan.id)}
+                              disabled={plan.status === "auto_deducting"}
+                            >
+                              <CreditCard className="w-3.5 h-3.5 mr-1" />
+                              立即划扣
+                            </Button>
+                          )}
+                          <Button variant="ghost" size="sm" onClick={() => openDetail(plan)}>
+                            <Eye className="w-3.5 h-3.5 mr-1" />
+                            详情
+                          </Button>
+                        </div>
                       </TableCell>
                     </TableRow>
                   ))}
@@ -399,11 +429,31 @@ export default function RepaymentPlanPage() {
                   )}
                 </div>
 
-                <div>
-                  <Label className="text-navy-500 mb-2 block flex items-center gap-1">
-                    <CreditCard className="w-4 h-4" />
-                    扣款账户信息
-                  </Label>
+                {selected && (selected.status === "pending" || selected.status === "auto_deducting") && (
+                    <div className="p-4 rounded-lg bg-gold-50 border border-gold-200">
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <p className="font-medium text-navy-700">立即执行划扣</p>
+                          <p className="text-sm text-navy-500 mt-1">点击按钮从绑定账户中扣除本期应还金额</p>
+                        </div>
+                        <Button
+                          variant="default"
+                          size="lg"
+                          onClick={() => handleDeduct(selected.id)}
+                          disabled={selected.status === "auto_deducting"}
+                        >
+                          <CreditCard className="w-4 h-4 mr-1" />
+                          {selected.status === "auto_deducting" ? "代扣中..." : "立即划扣"}
+                        </Button>
+                      </div>
+                    </div>
+                  )}
+
+                  <div>
+                    <Label className="text-navy-500 mb-2 block flex items-center gap-1">
+                      <CreditCard className="w-4 h-4" />
+                      扣款账户信息
+                    </Label>
                   <div className="p-4 rounded-lg border border-navy-100 bg-white">
                     <div className="flex items-start gap-3">
                       <div className="w-10 h-10 rounded-lg bg-navy-50 flex items-center justify-center">

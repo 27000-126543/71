@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useMemo } from "react";
+import React, { useState, useEffect, useMemo, useCallback } from "react";
 import { formatCurrency, formatPercent, formatDateTime, riskLevelText, riskLevelColor, alertTypeText } from "@/src/lib/utils";
 import type { DashboardStats, AlertEvent, RiskLevel } from "@/src/types";
 import KpiCard from "@/src/components/charts/KpiCard";
@@ -160,13 +160,38 @@ const TIME_RANGES = [
 
 export default function DashboardPage() {
   const [data, setData] = useState<DashboardStats>(MOCK_DASHBOARD_DATA);
-  const [timeRange, setTimeRange] = useState("month");
+  const [timeRange, setTimeRange] = useState<string>("month");
   const [now, setNow] = useState(new Date());
+  const [loading, setLoading] = useState(false);
 
   useEffect(() => {
     const timer = setInterval(() => setNow(new Date()), 1000);
     return () => clearInterval(timer);
   }, []);
+
+  const fetchStats = useCallback(async (range: string) => {
+    setLoading(true);
+    try {
+      const apiRange = range === "custom" ? "all" : range;
+      const res = await fetch(`/api/dashboard/stats?range=${apiRange}`);
+      const result = await res.json();
+      if (result.success && result.data) {
+        setData(result.data);
+      }
+    } catch (err) {
+      console.error("获取仪表盘数据失败", err);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchStats(timeRange);
+  }, [timeRange, fetchStats]);
+
+  const handleRangeChange = (range: string) => {
+    setTimeRange(range);
+  };
 
   const formatMonth = (m: string) => {
     const [, month] = m.split("-");
@@ -208,14 +233,15 @@ export default function DashboardPage() {
                 {TIME_RANGES.map((r) => (
                   <button
                     key={r.key}
-                    onClick={() => setTimeRange(r.key)}
+                    onClick={() => handleRangeChange(r.key)}
+                    disabled={loading}
                     className={`px-3 py-1.5 rounded-md text-sm transition-all ${
                       timeRange === r.key
                         ? "bg-gold-400 text-navy-900 font-semibold"
                         : "text-gray-300 hover:text-gold-300"
-                    }`}
+                    } ${loading ? "opacity-60 cursor-not-allowed" : ""}`}
                   >
-                    {r.label}
+                    {loading && timeRange === r.key ? "加载中..." : r.label}
                   </button>
                 ))}
               </div>

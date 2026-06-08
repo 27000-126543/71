@@ -601,10 +601,8 @@ export const store = {
       const c = readStore().collections.find((x) => x.id === id);
       return delay(c ? deepClone(c) : undefined);
     },
-    getByApplication: (appId: string) => {
-      const c = readStore().collections.find((x) => x.financeApplicationId === appId);
-      return delay(c ? deepClone(c) : undefined);
-    },
+    getByApplication: (appId: string) =>
+      delay(readStore().collections.filter((x) => x.financeApplicationId === appId).map(deepClone)),
     create: (c: CollectionCase) => {
       const s = readStore();
       const cloned = deepClone(c);

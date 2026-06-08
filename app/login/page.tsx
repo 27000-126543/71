@@ -36,11 +36,11 @@ const testAccounts: Record<UserRole, { username: string; password: string }> = {
 const getRoleWorkbenchPath = (role: UserRole): string => {
   const pathMap: Record<UserRole, string> = {
     core_enterprise: "/enterprise/workbench",
-    supplier: "/dashboard/supplier",
-    relationship_manager: "/dashboard/manager",
-    risk_director: "/dashboard/risk",
-    credit_committee: "/dashboard/committee",
-    admin: "/dashboard/admin",
+    supplier: "/supplier/workbench",
+    relationship_manager: "/approval/workbench",
+    risk_director: "/approval/workbench",
+    credit_committee: "/approval/workbench",
+    admin: "/dashboard",
   };
   return pathMap[role] || "/login";
 };

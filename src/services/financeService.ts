@@ -3,6 +3,7 @@ import { store } from "@/src/data/store";
 import { PlanEngine, type PlanInput } from "@/src/engine/PlanEngine";
 import { CreditService } from "@/src/services/CreditService";
 import { ApprovalService } from "@/src/services/approvalService";
+import { RepaymentService } from "@/src/services/repaymentService";
 
 export interface CreateApplicationInput {
   supplierId: string;
@@ -201,10 +202,17 @@ export async function approveApplication(id: string): Promise<FinanceApplication
 }
 
 export async function disburseApplication(id: string): Promise<FinanceApplication | undefined> {
-  return store.financeApplications.update(id, {
+  const updated = await store.financeApplications.update(id, {
     status: "disbursed",
     disbursedAt: new Date().toISOString(),
   });
+  if (updated) {
+    const existing = await RepaymentService.byApplication(id);
+    if (!existing || existing.length === 0) {
+      await RepaymentService.generateSchedule(id);
+    }
+  }
+  return updated;
 }
 
 export async function rejectApplication(id: string): Promise<FinanceApplication | undefined> {
@@ -219,6 +227,60 @@ export async function markOverdue(id: string): Promise<FinanceApplication | unde
   return store.financeApplications.update(id, { status: "overdue" });
 }
 
+export async function submitFullWorkflow(applicationId: string): Promise<{
+  success: boolean;
+  message?: string;
+  application?: FinanceApplication;
+}> {
+  const verify = await verifyInvoicesAndOrders(applicationId);
+  if (!verify) {
+    return { success: false, message: "融资申请不存在" };
+  }
+
+  if (!verify.authenticity || verify.confidence < 60) {
+    return { success: false, message: `验真失败：${verify.notes}` };
+  }
+
+  await setVerificationResult(applicationId, verify);
+
+  let app = await store.financeApplications.get(applicationId);
+  if (!app) {
+    return { success: false, message: "融资申请不存在" };
+  }
+
+  if (!app.financingPlans || app.financingPlans.length === 0) {
+    const plans = PlanEngine.generate({
+      principal: app.amount,
+      termDays: app.termDays,
+      riskLevel: app.riskLevel,
+      supplierCreditScore: (await CreditService.getBySupplier(app.supplierId))?.overallScore || 60,
+    });
+    app = await store.financeApplications.update(applicationId, { financingPlans: plans }) || app;
+  }
+
+  const submitted = await submitApplication(applicationId);
+  if (!submitted) {
+    return { success: false, message: "提交失败" };
+  }
+
+  const workflow = await ApprovalService.ensure({
+    financeApplicationId: applicationId,
+    amount: submitted.amount,
+    riskLevel: submitted.riskLevel,
+    supplierId: submitted.supplierId,
+  });
+
+  const finalApp = await store.financeApplications.update(applicationId, {
+    approvalWorkflowId: workflow.id,
+  });
+
+  return {
+    success: true,
+    message: "融资申请提交成功",
+    application: finalApp || submitted,
+  };
+}
+
 export const FinanceService = {
   getById: getApplicationById,
   all: getAllApplications,
@@ -231,6 +293,7 @@ export const FinanceService = {
   getPlans,
   create: createApplication,
   submit: submitApplication,
+  submitFullWorkflow,
   selectPlan,
   update: updateApplication,
   verify: verifyInvoicesAndOrders,

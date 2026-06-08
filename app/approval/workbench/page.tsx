@@ -41,6 +41,7 @@ import {
   store,
   initializeStore,
 } from "@/src/data/store";
+import { useAuth } from "@/src/context/AuthContext";
 import type {
   ApprovalWorkflow,
   FinanceApplication,
@@ -80,6 +81,7 @@ const urgencyDotStyles: Record<RiskLevel, string> = {
 };
 
 export default function ApprovalWorkbenchPage() {
+  const { user } = useAuth();
   const [pending, setPending] = React.useState<WorkbenchItem[]>([]);
   const [approved, setApproved] = React.useState<WorkbenchItem[]>([]);
   const [cc, setCc] = React.useState<WorkbenchItem[]>([]);
@@ -108,79 +110,94 @@ export default function ApprovalWorkbenchPage() {
 
   React.useEffect(() => {
     initializeStore();
-    loadData();
-  }, []);
+    if (user) {
+      loadData();
+    }
+  }, [user]);
+
+  const buildItems = async (
+    wfList: ApprovalWorkflow[]
+  ): Promise<WorkbenchItem[]> => {
+    const [apps, enterprises] = await Promise.all([
+      store.financeApplications.all(),
+      store.enterprises.all(),
+    ]);
+    return wfList
+      .map((wf) => {
+        const application = apps.find(
+          (a) => a.id === wf.financeApplicationId
+        );
+        if (!application) return null;
+        const supplier = enterprises.find(
+          (e) => e.id === application.supplierId
+        );
+        const coreEnterprise = enterprises.find(
+          (e) => e.id === application.coreEnterpriseId
+        );
+        const currentNode = wf.nodes[wf.currentNodeIndex];
+        let remainingHours = -1;
+        let isTimeout = false;
+        if (currentNode?.deadline) {
+          const deadline = new Date(currentNode.deadline);
+          const now = new Date();
+          const diffMs = deadline.getTime() - now.getTime();
+          remainingHours = diffMs / (1000 * 60 * 60);
+          isTimeout = remainingHours < 0;
+        }
+        const urgency: RiskLevel = isTimeout
+          ? "critical"
+          : remainingHours < 4
+          ? "high"
+          : remainingHours < 12
+          ? "medium"
+          : "low";
+        return {
+          workflow: wf,
+          application,
+          supplier,
+          coreEnterprise,
+          urgency,
+          remainingHours,
+          isTimeout,
+        } as WorkbenchItem;
+      })
+      .filter((i): i is WorkbenchItem => i !== null)
+      .sort(
+        (a, b) =>
+          urgencyOrder[a.urgency] - urgencyOrder[b.urgency] ||
+          a.remainingHours - b.remainingHours
+      );
+  };
 
   const loadData = async () => {
     setLoading(true);
     try {
-      const [workflows, apps, enterprises] = await Promise.all([
+      const [workbenchRes, allWorkflowsRes] = await Promise.all([
+        fetch("/api/approval/workbench").then((r) => r.json()),
         store.approvalWorkflows.all(),
-        store.financeApplications.all(),
-        store.enterprises.all(),
       ]);
 
-      const buildItems = (
-        wfList: ApprovalWorkflow[]
-      ): WorkbenchItem[] => {
-        return wfList
-          .map((wf) => {
-            const application = apps.find(
-              (a) => a.id === wf.financeApplicationId
-            );
-            if (!application) return null;
-            const supplier = enterprises.find(
-              (e) => e.id === application.supplierId
-            );
-            const coreEnterprise = enterprises.find(
-              (e) => e.id === application.coreEnterpriseId
-            );
-            const currentNode = wf.nodes[wf.currentNodeIndex];
-            let remainingHours = -1;
-            let isTimeout = false;
-            if (currentNode?.deadline) {
-              const deadline = new Date(currentNode.deadline);
-              const now = new Date();
-              const diffMs = deadline.getTime() - now.getTime();
-              remainingHours = diffMs / (1000 * 60 * 60);
-              isTimeout = remainingHours < 0;
-            }
-            const urgency: RiskLevel = isTimeout
-              ? "critical"
-              : remainingHours < 4
-              ? "high"
-              : remainingHours < 12
-              ? "medium"
-              : "low";
-            return {
-              workflow: wf,
-              application,
-              supplier,
-              coreEnterprise,
-              urgency,
-              remainingHours,
-              isTimeout,
-            } as WorkbenchItem;
-          })
-          .filter((i): i is WorkbenchItem => i !== null)
-          .sort(
-            (a, b) =>
-              urgencyOrder[a.urgency] - urgencyOrder[b.urgency] ||
-              a.remainingHours - b.remainingHours
-          );
-      };
+      let pendingWf: ApprovalWorkflow[] = [];
+      if (workbenchRes?.success && workbenchRes.data?.items) {
+        pendingWf = workbenchRes.data.items;
+      }
 
-      const pendingWf = workflows.filter(
-        (w) => w.status === "pending" || w.status === "timeout"
-      );
-      const approvedWf = workflows.filter(
+      const approvedWf = allWorkflowsRes.filter(
         (w) => w.status === "approved" || w.status === "rejected"
       );
-      const ccWf = workflows.filter((w) => w.escalated);
+      const ccWf = allWorkflowsRes.filter((w) => w.escalated);
 
-      setPending(buildItems(pendingWf));
-      setApproved(buildItems(approvedWf));
-      setCc(buildItems(ccWf));
+      const [pendingItems, approvedItems, ccItems] = await Promise.all([
+        buildItems(pendingWf),
+        buildItems(approvedWf),
+        buildItems(ccWf),
+      ]);
+
+      setPending(pendingItems);
+      setApproved(approvedItems);
+      setCc(ccItems);
+    } catch (e) {
+      console.error("loadData error", e);
     } finally {
       setLoading(false);
     }
@@ -192,10 +209,26 @@ export default function ApprovalWorkbenchPage() {
     setDecisionComment("");
   };
 
-  const handleDecision = async (decision: "approve" | "reject") => {
-    if (!selected) return;
-    setDetailOpen(false);
-    setSelected(null);
+  const handleDecision = async (
+    decision: "approve" | "reject" | "escalate",
+    item?: WorkbenchItem | null
+  ) => {
+    const target = item || selected;
+    if (!target) return;
+    try {
+      const res = await fetch(`/api/approval/${target.workflow.id}/decide`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ decision, comment: decisionComment }),
+      });
+      if (!res.ok) throw new Error("操作失败");
+      setDetailOpen(false);
+      setSelected(null);
+      setDecisionComment("");
+      await loadData();
+    } catch (e) {
+      alert(e instanceof Error ? e.message : "操作失败");
+    }
   };
 
   const formatRemaining = (hours: number) => {
@@ -214,117 +247,127 @@ export default function ApprovalWorkbenchPage() {
     return `剩余 ${h}小时${m}分`;
   };
 
-  const renderItemCard = (item: WorkbenchItem, showActions: boolean) => (
-    <Card
-      key={item.workflow.id}
-      className={cn(
-        "cursor-pointer transition-all hover:shadow-card-hover",
-        urgencyStyles[item.urgency]
-      )}
-      onClick={() => openDetail(item)}
-    >
-      <CardContent className="p-5">
-        <div className="flex items-start justify-between gap-4">
-          <div className="flex-1 min-w-0">
-            <div className="flex items-center gap-3 mb-2">
-              <span
-                className={cn(
-                  "inline-block w-2.5 h-2.5 rounded-full",
-                  urgencyDotStyles[item.urgency]
-                )}
-              />
-              <span className="font-mono text-sm text-navy-500">
-                {item.application.applicationNo}
-              </span>
-              <Badge
-                className={cn(
-                  "border",
-                  riskLevelBgColor(item.application.riskLevel)
-                )}
-              >
-                {riskLevelText(item.application.riskLevel)}
-              </Badge>
-              {item.isTimeout && (
-                <Badge variant="danger">
-                  <AlertTriangle className="w-3 h-3 mr-1" />
-                  超时
-                </Badge>
-              )}
-            </div>
-
-            <div className="flex items-center gap-2 mb-2">
-              <Building2 className="w-4 h-4 text-navy-400" />
-              <span className="font-medium text-navy-700">
-                {item.supplier?.name || "-"}
-              </span>
-              <span className="text-gray-400 text-sm">
-                / {item.coreEnterprise?.name}
-              </span>
-            </div>
-
-            <div className="flex items-center gap-6 text-sm text-navy-500">
-              <span className="flex items-center gap-1">
-                <FileText className="w-3.5 h-3.5" />
-                融资金额:
-                <span className="font-semibold text-navy-700">
-                  {formatCurrency(item.application.amount)}
+  const renderItemCard = (item: WorkbenchItem, showActions: boolean) => {
+    const currentNode = item.workflow.nodes[item.workflow.currentNodeIndex];
+    return (
+      <Card
+        key={item.workflow.id}
+        className={cn(
+          "cursor-pointer transition-all hover:shadow-card-hover",
+          urgencyStyles[item.urgency]
+        )}
+        onClick={() => openDetail(item)}
+      >
+        <CardContent className="p-5">
+          <div className="flex items-start justify-between gap-4">
+            <div className="flex-1 min-w-0">
+              <div className="flex items-center gap-3 mb-2">
+                <span
+                  className={cn(
+                    "inline-block w-2.5 h-2.5 rounded-full",
+                    urgencyDotStyles[item.urgency]
+                  )}
+                />
+                <span className="font-mono text-sm text-navy-500">
+                  {item.application.applicationNo}
                 </span>
-              </span>
-              <span className="flex items-center gap-1">
-                <Timer className="w-3.5 h-3.5" />
-                {formatDateTime(item.workflow.createdAt, "MM-dd HH:mm")}
-              </span>
-              <span
-                className={cn(
-                  "flex items-center gap-1 font-medium",
-                  item.isTimeout ? "text-status-danger" : "text-navy-600"
+                <Badge
+                  className={cn(
+                    "border",
+                    riskLevelBgColor(item.application.riskLevel)
+                  )}
+                >
+                  {riskLevelText(item.application.riskLevel)}
+                </Badge>
+                {currentNode && (
+                  <Badge variant="default" className="border border-navy-200 bg-white">
+                    {currentNode.name}
+                  </Badge>
                 )}
-              >
-                <Clock className="w-3.5 h-3.5" />
-                {formatRemaining(item.remainingHours)}
-              </span>
+                {item.isTimeout && (
+                  <Badge variant="danger">
+                    <AlertTriangle className="w-3 h-3 mr-1" />
+                    超时
+                  </Badge>
+                )}
+              </div>
+
+              <div className="flex items-center gap-2 mb-2">
+                <Building2 className="w-4 h-4 text-navy-400" />
+                <span className="font-medium text-navy-700">
+                  {item.supplier?.name || "-"}
+                </span>
+                <span className="text-gray-400 text-sm">
+                  / {item.coreEnterprise?.name}
+                </span>
+              </div>
+
+              <div className="flex items-center gap-6 text-sm text-navy-500">
+                <span className="flex items-center gap-1">
+                  <FileText className="w-3.5 h-3.5" />
+                  融资金额:
+                  <span className="font-semibold text-navy-700">
+                    {formatCurrency(item.application.amount)}
+                  </span>
+                </span>
+                <span className="flex items-center gap-1">
+                  <Timer className="w-3.5 h-3.5" />
+                  {formatDateTime(item.workflow.createdAt, "MM-dd HH:mm")}
+                </span>
+                <span
+                  className={cn(
+                    "flex items-center gap-1 font-medium",
+                    item.isTimeout ? "text-status-danger" : "text-navy-600"
+                  )}
+                >
+                  <Clock className="w-3.5 h-3.5" />
+                  {formatRemaining(item.remainingHours)}
+                </span>
+              </div>
             </div>
+
+            {showActions && (
+              <div
+                className="flex flex-col gap-2"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <Button
+                  size="sm"
+                  variant="default"
+                  className="w-20"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setDecisionComment("");
+                    handleDecision("approve", item);
+                  }}
+                >
+                  <CheckCircle2 className="w-3.5 h-3.5 mr-1" />
+                  通过
+                </Button>
+                <Button
+                  size="sm"
+                  variant="destructive"
+                  className="w-20"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setDecisionComment("");
+                    handleDecision("reject", item);
+                  }}
+                >
+                  <X className="w-3.5 h-3.5 mr-1" />
+                  拒绝
+                </Button>
+              </div>
+            )}
+
+            {!showActions && (
+              <ChevronRight className="w-5 h-5 text-navy-300 flex-shrink-0" />
+            )}
           </div>
-
-          {showActions && (
-            <div
-              className="flex flex-col gap-2"
-              onClick={(e) => e.stopPropagation()}
-            >
-              <Button
-                size="sm"
-                variant="default"
-                className="w-20"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  openDetail(item);
-                }}
-              >
-                <CheckCircle2 className="w-3.5 h-3.5 mr-1" />
-                通过
-              </Button>
-              <Button
-                size="sm"
-                variant="destructive"
-                className="w-20"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  openDetail(item);
-                }}
-              >
-                <X className="w-3.5 h-3.5 mr-1" />
-                拒绝
-              </Button>
-            </div>
-          )}
-
-          {!showActions && (
-            <ChevronRight className="w-5 h-5 text-navy-300 flex-shrink-0" />
-          )}
-        </div>
-      </CardContent>
-    </Card>
-  );
+        </CardContent>
+      </Card>
+    );
+  };
 
   const renderList = (list: WorkbenchItem[], showActions: boolean) => {
     if (loading) {
