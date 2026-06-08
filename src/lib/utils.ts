@@ -23,7 +23,7 @@ export function cn(...inputs: ClassValue[]) {
  * @param decimals 小数位数，默认2位
  */
 export function formatCurrency(amount: number, decimals: number = 2): string {
-  if (isNaN(amount)) return "¥0.00";
+  if (!isFinite(amount)) return "¥0.00";
   return new Intl.NumberFormat("zh-CN", {
     style: "currency",
     currency: "CNY",
@@ -38,7 +38,7 @@ export function formatCurrency(amount: number, decimals: number = 2): string {
  * @param decimals 小数位数，默认1位
  */
 export function formatPercent(value: number, decimals: number = 1): string {
-  if (isNaN(value)) return "0%";
+  if (!isFinite(value)) return "0%";
   return `${(value * 100).toFixed(decimals)}%`;
 }
 

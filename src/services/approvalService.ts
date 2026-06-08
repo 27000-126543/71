@@ -100,13 +100,13 @@ export async function getWorkflowsAssigned(
 
 export async function getWorkbench(
   role: UserRole,
+  userId: string | undefined,
   options?: {
     status?: string;
     page?: number;
     pageSize?: number;
   }
 ): Promise<PaginatedResult<ApprovalWorkflow>> {
-  const userId = store.getCurrentUserId();
   let items: ApprovalWorkflow[];
   if (userId) {
     items = await getWorkflowsAssigned(userId, role);

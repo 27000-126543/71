@@ -63,13 +63,24 @@ function AuthProvider({ children }: AuthProviderProps) {
     let cancelled = false;
 
     async function init() {
+      if (typeof window !== "undefined") {
+        const raw = window.localStorage.getItem(STORAGE_KEY);
+        if (raw) {
+          try {
+            const parsed = JSON.parse(raw);
+            setUser(safeUser(parsed) as User);
+          } catch {
+          }
+        }
+      }
+
       const currentUser = await getCurrentUser();
       if (cancelled) return;
 
       if (currentUser) {
         setUser(currentUser);
         if (typeof window !== "undefined") {
-          window.localStorage.setItem(STORAGE_KEY, JSON.stringify(currentUser));
+          window.localStorage.setItem(STORAGE_KEY, JSON.stringify(safeUser(currentUser)));
         }
       } else {
         setUser(null);
@@ -102,7 +113,7 @@ function AuthProvider({ children }: AuthProviderProps) {
         throw new Error(data.message || "登录失败");
       }
 
-      const loggedInUser = data.data.user as User;
+      const loggedInUser = safeUser(data.data.user) as User;
       setUser(loggedInUser);
 
       if (typeof window !== "undefined") {

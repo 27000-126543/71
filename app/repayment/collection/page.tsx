@@ -44,6 +44,7 @@ import {
   userRoleText,
 } from "@/src/lib/utils";
 import { store, initializeStore } from "@/src/data/store";
+import { RepaymentService } from "@/src/services/repaymentService";
 import type {
   CollectionCase,
   Enterprise,
@@ -128,7 +129,7 @@ export default function RepaymentCollectionPage() {
     setLoading(true);
     try {
       const [allCases, allSuppliers, allUsers, allApps, allRepayments] = await Promise.all([
-        store.collections.all(),
+        RepaymentService.allCollections(),
         store.enterprises.all(),
         store.users.all(),
         store.financeApplications.all(),

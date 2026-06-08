@@ -25,6 +25,9 @@ const MOCK_DASHBOARD_DATA: DashboardStats = {
   totalOutstanding: 1285678450.25,
   totalFinancingCount: 3847,
   creditUtilizationRate: 0.7234,
+  totalCreditLimit: 1777287374.88,
+  usedCreditLimit: 1285678450.25,
+  availableCreditLimit: 491608924.63,
   overdueRate: 0.0245,
   nonPerformingRate: 0.0087,
   totalInterestIncome: 28567890.5,
@@ -263,18 +266,19 @@ export default function DashboardPage() {
           <div className="relative rounded-xl p-5 border bg-navy-700/60 border-gold-500/30 backdrop-blur-sm animate-pulse-glow">
             <div className="flex items-start justify-between">
               <div className="text-sm font-medium text-gray-300 mb-2">授信使用率</div>
+              <div className="text-xs text-gold-300 font-semibold">{formatPercent(data.creditUtilizationRate)}</div>
             </div>
             <div className="flex items-center justify-between">
               <GaugeChart value={data.creditUtilizationRate} darkMode size="md" />
               <div className="space-y-2 text-sm">
                 <div className="text-gray-400">
-                  已用: <span className="text-gold-300 font-semibold">{formatCurrency(data.totalOutstanding, 0)}</span>
+                  总额度: <span className="text-white font-semibold">{formatCurrency(data.totalCreditLimit, 0)}</span>
                 </div>
                 <div className="text-gray-400">
-                  总额度: <span className="text-white font-semibold">{formatCurrency(data.totalOutstanding / data.creditUtilizationRate, 0)}</span>
+                  已用: <span className="text-gold-300 font-semibold">{formatCurrency(data.usedCreditLimit, 0)}</span>
                 </div>
                 <div className="text-gray-400">
-                  剩余: <span className="text-emerald-400 font-semibold">{formatCurrency((data.totalOutstanding / data.creditUtilizationRate) - data.totalOutstanding, 0)}</span>
+                  剩余: <span className="text-emerald-400 font-semibold">{formatCurrency(data.availableCreditLimit, 0)}</span>
                 </div>
               </div>
             </div>
@@ -341,7 +345,8 @@ export default function DashboardPage() {
                 </thead>
                 <tbody>
                   {data.riskDistribution.map((item) => {
-                    const totalAmount = data.riskDistribution.reduce((s, r) => s + r.amount, 0);
+                    const totalAmount = data.riskDistribution.reduce((s, r) => s + (isFinite(r.amount) ? r.amount : 0), 0);
+                    const ratio = totalAmount > 0 && isFinite(item.amount) ? item.amount / totalAmount : 0;
                     return (
                       <tr key={item.level} className="border-t border-gold-500/10">
                         <td className="py-2">
@@ -352,7 +357,7 @@ export default function DashboardPage() {
                         <td className="py-2 text-right font-mono">{item.count.toLocaleString()}</td>
                         <td className="py-2 text-right font-mono text-gold-300">{formatCurrency(item.amount, 0)}</td>
                         <td className="py-2 text-right font-mono text-gray-400">
-                          {formatPercent(item.amount / totalAmount)}
+                          {formatPercent(ratio)}
                         </td>
                       </tr>
                     );

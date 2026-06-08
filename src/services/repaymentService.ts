@@ -19,6 +19,7 @@ export async function list(params?: {
   page?: number;
   pageSize?: number;
 }): Promise<PaginatedResult<RepaymentRecord>> {
+  await runDailyOverdueScan();
   let all = await store.repayments.all();
   if (params?.financeApplicationId) {
     all = all.filter((r) => r.financeApplicationId === params.financeApplicationId);
@@ -97,10 +98,37 @@ export async function autoDeduct(
   if (overdueRecord) {
     await FinanceService.markOverdue(r.financeApplicationId);
     const app = await FinanceService.getById(r.financeApplicationId);
-    const existingCase = await getCollectionByApplication(r.financeApplicationId);
-    if (!existingCase && app) {
-      const overdueDays = calculateOverdueDays(r.dueDate);
-      await createCollectionCase({
+    if (!app) return overdueRecord;
+
+    const overdueDays = calculateOverdueDays(r.dueDate);
+    const existingActive = await getActiveCollectionByApplication(r.financeApplicationId);
+
+    if (existingActive) {
+      const newOverdueAmount = (existingActive.overdueAmount || 0) + r.totalAmount;
+      const newOverdueDays = Math.max(existingActive.overdueDays || 0, overdueDays);
+
+      const alreadyHasNote = existingActive.followUpRecords.some(
+        (rec) =>
+          rec.content.includes(`还款 ${r.periodNo} 期`) &&
+          rec.content.includes("代扣失败")
+      );
+      if (!alreadyHasNote) {
+        await store.collections.update(existingActive.id, {
+          overdueAmount: newOverdueAmount,
+          overdueDays: newOverdueDays,
+          followUpRecords: [
+            ...existingActive.followUpRecords,
+            {
+              time: new Date().toISOString(),
+              operator: "系统",
+              content: `第 ${r.periodNo} 期还款代扣失败，新增逾期金额 ${r.totalAmount} 元`,
+            },
+          ],
+        });
+      }
+      await store.repayments.update(r.id, { collectionCaseId: existingActive.id });
+    } else {
+      const newCase = await createCollectionCase({
         financeApplicationId: r.financeApplicationId,
         supplierId: app.supplierId,
         overdueDays,
@@ -110,10 +138,11 @@ export async function autoDeduct(
           {
             time: new Date().toISOString(),
             operator: "系统",
-            content: "还款代扣失败，生成催收工单",
+            content: `第 ${r.periodNo} 期还款代扣失败，生成催收工单，逾期金额 ${r.totalAmount} 元`,
           },
         ],
       });
+      await store.repayments.update(r.id, { collectionCaseId: newCase.id });
     }
   }
   return overdueRecord;
@@ -151,9 +180,20 @@ export async function getCollectionById(id: string): Promise<CollectionCase | un
 
 export async function getCollectionByApplication(
   appId: string
-): Promise<CollectionCase | undefined> {
-  await runDailyOverdueScan();
+): Promise<CollectionCase[]> {
   return store.collections.getByApplication(appId);
+}
+
+async function getActiveCollectionByApplication(
+  appId: string
+): Promise<CollectionCase | undefined> {
+  const all = await store.collections.filter(
+    (c) =>
+      c.financeApplicationId === appId &&
+      !["closed", "written_off"].includes(c.status)
+  );
+  all.sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
+  return all[0];
 }
 
 export async function getCollectionsByAssignee(userId: string): Promise<CollectionCase[]> {

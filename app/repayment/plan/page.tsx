@@ -47,6 +47,7 @@ import type {
   RepaymentRecord,
   FinanceApplication,
   Enterprise,
+  CollectionCase,
 } from "@/src/types";
 
 const statusText: Record<RepaymentRecord["status"], string> = {
@@ -72,12 +73,14 @@ const mockAccounts = [
 
 export default function RepaymentPlanPage() {
   const [plans, setPlans] = React.useState<(RepaymentRecord & { app?: FinanceApplication; supplier?: Enterprise; autoDeduct: boolean })[]>([]);
+  const [collections, setCollections] = React.useState<CollectionCase[]>([]);
   const [loading, setLoading] = React.useState(true);
   const [selected, setSelected] = React.useState<RepaymentRecord | null>(null);
   const [detailOpen, setDetailOpen] = React.useState(false);
   const [relatedApp, setRelatedApp] = React.useState<FinanceApplication | null>(null);
   const [relatedSupplier, setRelatedSupplier] = React.useState<Enterprise | null>(null);
   const [relatedPlans, setRelatedPlans] = React.useState<RepaymentRecord[]>([]);
+  const [relatedCollection, setRelatedCollection] = React.useState<CollectionCase | null>(null);
 
   React.useEffect(() => {
     initializeStore();
@@ -87,11 +90,13 @@ export default function RepaymentPlanPage() {
   const loadData = async () => {
     setLoading(true);
     try {
-      const [allRepayments, allApps, allSuppliers] = await Promise.all([
+      const [allRepayments, allApps, allSuppliers, allCollections] = await Promise.all([
         store.repayments.all(),
         store.financeApplications.all(),
         store.enterprises.all(),
+        store.collections.all(),
       ]);
+      setCollections(allCollections);
       const enriched = allRepayments.map((r, idx) => ({
         ...r,
         app: allApps.find((a) => a.id === r.financeApplicationId),
@@ -128,14 +133,20 @@ export default function RepaymentPlanPage() {
 
   const openDetail = async (r: RepaymentRecord) => {
     setSelected(r);
-    const [apps, suppliers, related] = await Promise.all([
+    const [apps, suppliers, related, allCollections] = await Promise.all([
       store.financeApplications.get(r.financeApplicationId),
       store.enterprises.all(),
       store.repayments.filter((rp) => rp.financeApplicationId === r.financeApplicationId),
+      store.collections.all(),
     ]);
     setRelatedApp(apps || null);
     setRelatedSupplier(suppliers.find((s) => s.id === apps?.supplierId) || null);
     setRelatedPlans(related);
+    setRelatedCollection(
+      r.collectionCaseId
+        ? allCollections.find((c) => c.id === r.collectionCaseId) || null
+        : null
+    );
     setDetailOpen(true);
   };
 
@@ -263,6 +274,7 @@ export default function RepaymentPlanPage() {
                     <TableHead className="text-right">利息</TableHead>
                     <TableHead className="text-right">应还总额</TableHead>
                     <TableHead>状态</TableHead>
+                    <TableHead>催收</TableHead>
                     <TableHead>自动划扣</TableHead>
                     <TableHead className="text-right">操作</TableHead>
                   </TableRow>
@@ -295,6 +307,20 @@ export default function RepaymentPlanPage() {
                         <Badge variant={statusBadgeVariant[plan.status]}>
                           {statusText[plan.status]}
                         </Badge>
+                      </TableCell>
+                      <TableCell>
+                        {plan.collectionCaseId ? (
+                          (() => {
+                            const col = collections.find((c) => c.id === plan.collectionCaseId);
+                            return (
+                              <Badge variant="danger" title={col ? `工单编号: ${col.caseNo}` : "已关联催收工单"}>
+                                已催收
+                              </Badge>
+                            );
+                          })()
+                        ) : (
+                          <span className="text-navy-300 text-sm">-</span>
+                        )}
                       </TableCell>
                       <TableCell>
                         <button
@@ -383,6 +409,17 @@ export default function RepaymentPlanPage() {
                       </Badge>
                     </div>
                   </div>
+                  {relatedCollection && (
+                    <div>
+                      <Label className="text-navy-500">关联催收工单</Label>
+                      <div className="mt-1 flex items-center gap-2">
+                        <Badge variant="danger">{relatedCollection.caseNo}</Badge>
+                        <span className="text-sm text-navy-500">
+                          逾期 {relatedCollection.overdueDays} 天 / {formatCurrency(relatedCollection.overdueAmount)}
+                        </span>
+                      </div>
+                    </div>
+                  )}
                 </div>
 
                 <Separator />

@@ -15,7 +15,7 @@ export async function GET(request: NextRequest) {
     }
 
     const { searchParams } = new URL(request.url);
-    const result = await ApprovalService.getWorkbench(user.role, {
+    const result = await ApprovalService.getWorkbench(user.role, user.id, {
       status: (searchParams.get("status") as ApprovalStatus) || undefined,
       page: searchParams.get("page") ? parseInt(searchParams.get("page")!) : undefined,
       pageSize: searchParams.get("pageSize") ? parseInt(searchParams.get("pageSize")!) : undefined,
