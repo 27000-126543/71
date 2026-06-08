@@ -75,20 +75,44 @@ export async function getDashboardStats(range: DashboardTimeRange = "all"): Prom
     range === "all" ? true : isInRange(getEffectiveDate(a), start, end)
   );
 
-  const totalCreditLimit = safeNumber(
-    allScores.reduce((s, c) => s + safeNumber(c.creditLimit, 0), 0),
-    0
-  );
+  let totalCreditLimit = 0;
+  let usedCreditLimit = 0;
+  let availableCreditLimit = 0;
+  let creditUtilizationRate = 0;
 
-  const usedCreditLimit = safeNumber(
-    disbursed
-      .filter((a) => a.status === "disbursed")
-      .reduce((s, a) => s + safeNumber(a.amount, 0), 0),
-    0
-  );
-
-  const availableCreditLimit = Math.max(0, totalCreditLimit - usedCreditLimit);
-  const creditUtilizationRate = safeDivide(usedCreditLimit, totalCreditLimit);
+  if (range === "all") {
+    totalCreditLimit = safeNumber(
+      allScores.reduce((s, c) => s + safeNumber(c.creditLimit, 0), 0),
+      0
+    );
+    usedCreditLimit = safeNumber(
+      disbursedAll.reduce((s, a) => s + safeNumber(a.amount, 0), 0),
+      0
+    );
+    availableCreditLimit = Math.max(0, safeNumber(totalCreditLimit - usedCreditLimit, 0));
+    creditUtilizationRate = safeDivide(usedCreditLimit, totalCreditLimit);
+  } else {
+    if (disbursed.length > 0) {
+      const supplierIds = new Set(disbursed.map((a) => a.supplierId).filter(Boolean));
+      totalCreditLimit = safeNumber(
+        allScores
+          .filter((s) => supplierIds.has(s.supplierId))
+          .reduce((s, c) => s + safeNumber(c.creditLimit, 0), 0),
+        0
+      );
+      usedCreditLimit = safeNumber(
+        disbursed.reduce((s, a) => s + safeNumber(a.amount, 0), 0),
+        0
+      );
+      availableCreditLimit = Math.max(0, safeNumber(totalCreditLimit - usedCreditLimit, 0));
+      creditUtilizationRate = safeDivide(usedCreditLimit, totalCreditLimit);
+    } else {
+      totalCreditLimit = 0;
+      usedCreditLimit = 0;
+      availableCreditLimit = 0;
+      creditUtilizationRate = 0;
+    }
+  }
 
   let totalOutstanding = 0;
   let totalFinancingCount = 0;

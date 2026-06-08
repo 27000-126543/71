@@ -18,7 +18,7 @@ export async function list(params?: {
   status?: string;
   page?: number;
   pageSize?: number;
-}): Promise<PaginatedResult<RepaymentRecord>> {
+}): Promise<PaginatedResult<RepaymentRecord> & { collectionsMap?: Record<string, { caseNo: string; status: string; overdueAmount: number }> }> {
   await runDailyOverdueScan();
   let all = await store.repayments.all();
   if (params?.financeApplicationId) {
@@ -28,7 +28,28 @@ export async function list(params?: {
     all = all.filter((r) => r.status === params.status);
   }
   all.sort((a, b) => (a.dueDate < b.dueDate ? 1 : -1));
-  return store.paginate(all, params?.page, params?.pageSize);
+  const paginated = store.paginate(all, params?.page, params?.pageSize);
+
+  const collectionCaseIds = new Set<string>();
+  for (const r of paginated.items) {
+    if (r.collectionCaseId) collectionCaseIds.add(r.collectionCaseId);
+  }
+
+  const collectionsMap: Record<string, { caseNo: string; status: string; overdueAmount: number }> = {};
+  if (collectionCaseIds.size > 0) {
+    const allCollections = await store.collections.all();
+    for (const c of allCollections) {
+      if (collectionCaseIds.has(c.id)) {
+        collectionsMap[c.id] = {
+          caseNo: c.caseNo,
+          status: c.status,
+          overdueAmount: c.overdueAmount,
+        };
+      }
+    }
+  }
+
+  return { ...paginated, collectionsMap };
 }
 
 export async function getOverdueRepayments(): Promise<RepaymentRecord[]> {
@@ -170,18 +191,22 @@ export async function manualRepay(
 
 export async function getAllCollections(): Promise<CollectionCase[]> {
   await runDailyOverdueScan();
-  return store.collections.all();
+  const cases = await store.collections.all();
+  return syncAllCasesWithRepayments(cases);
 }
 
 export async function getCollectionById(id: string): Promise<CollectionCase | undefined> {
   await runDailyOverdueScan();
-  return store.collections.get(id);
+  const c = await store.collections.get(id);
+  if (!c) return undefined;
+  return syncCaseWithRepayments(id);
 }
 
 export async function getCollectionByApplication(
   appId: string
 ): Promise<CollectionCase[]> {
-  return store.collections.getByApplication(appId);
+  const cases = await store.collections.getByApplication(appId);
+  return syncAllCasesWithRepayments(cases);
 }
 
 async function getActiveCollectionByApplication(
@@ -193,20 +218,23 @@ async function getActiveCollectionByApplication(
       !["closed", "written_off"].includes(c.status)
   );
   all.sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
-  return all[0];
+  if (!all[0]) return undefined;
+  return syncCaseWithRepayments(all[0].id);
 }
 
 export async function getCollectionsByAssignee(userId: string): Promise<CollectionCase[]> {
   await runDailyOverdueScan();
-  return store.collections.filter((c) => c.assignedTo === userId);
+  const cases = await store.collections.filter((c) => c.assignedTo === userId);
+  return syncAllCasesWithRepayments(cases);
 }
 
 export async function getActiveCollections(): Promise<CollectionCase[]> {
   await runDailyOverdueScan();
-  return store.collections.filter(
+  const cases = await store.collections.filter(
     (c) =>
       ["new", "contacted", "promise_to_pay", "escalated", "legal_proceeding"].includes(c.status)
   );
+  return syncAllCasesWithRepayments(cases);
 }
 
 export async function createCollectionCaseDirect(
@@ -307,6 +335,37 @@ export async function assignCollection(
   return store.collections.update(caseId, { assignedTo: userId });
 }
 
+async function syncCaseWithRepayments(caseId: string): Promise<CollectionCase | undefined> {
+  const c = await store.collections.get(caseId);
+  if (!c) return undefined;
+
+  const linkedRepays = await store.repayments.filter(
+    (r) =>
+      r.collectionCaseId === c.id &&
+      (r.status === "overdue" || r.status === "partial")
+  );
+
+  const overdueAmount = linkedRepays.reduce(
+    (sum, r) => sum + (r.totalAmount - (r.actualPaidAmount || 0)),
+    0
+  );
+
+  if (overdueAmount !== c.overdueAmount) {
+    return store.collections.update(c.id, { overdueAmount });
+  }
+  return c;
+}
+
+async function syncAllCasesWithRepayments(cases: CollectionCase[]): Promise<CollectionCase[]> {
+  const result: CollectionCase[] = [];
+  for (const c of cases) {
+    const synced = await syncCaseWithRepayments(c.id);
+    if (synced) result.push(synced);
+    else result.push(c);
+  }
+  return result;
+}
+
 export async function runDailyOverdueScan(): Promise<{ updated: number }> {
   const allCases = await store.collections.all();
   const activeCases = allCases.filter(
@@ -316,16 +375,40 @@ export async function runDailyOverdueScan(): Promise<{ updated: number }> {
   const now = new Date();
 
   for (const c of activeCases) {
-    const repayments = await store.repayments.filter(
-      (r) => r.financeApplicationId === c.financeApplicationId
-    );
-    if (repayments.length === 0) continue;
+    let overdueDays = c.overdueDays || 0;
 
-    const earliestDue = repayments.reduce(
-      (earliest, r) => (r.dueDate < earliest ? r.dueDate : earliest),
-      repayments[0].dueDate
-    );
-    const overdueDays = calculateOverdueDays(earliestDue);
+    if (overdueDays <= 0) {
+      const linkedOverdueRepays = await store.repayments.filter(
+        (r) =>
+          r.financeApplicationId === c.financeApplicationId &&
+          r.collectionCaseId === c.id &&
+          (r.status === "overdue" || r.status === "partial")
+      );
+      if (linkedOverdueRepays.length > 0) {
+        const earliestDue = linkedOverdueRepays.reduce(
+          (earliest, r) => (r.dueDate < earliest ? r.dueDate : earliest),
+          linkedOverdueRepays[0].dueDate
+        );
+        overdueDays = calculateOverdueDays(earliestDue);
+      } else {
+        const allOverdueRepays = await store.repayments.filter(
+          (r) =>
+            r.financeApplicationId === c.financeApplicationId &&
+            (r.status === "overdue" || r.status === "partial")
+        );
+        if (allOverdueRepays.length > 0) {
+          const earliestDue = allOverdueRepays.reduce(
+            (earliest, r) => (r.dueDate < earliest ? r.dueDate : earliest),
+            allOverdueRepays[0].dueDate
+          );
+          overdueDays = calculateOverdueDays(earliestDue);
+        }
+      }
+    }
+
+    if (overdueDays > 0 && overdueDays !== c.overdueDays) {
+      await store.collections.update(c.id, { overdueDays });
+    }
 
     if (overdueDays > 90) {
       const alreadyHasLegalNote = c.followUpRecords.some(

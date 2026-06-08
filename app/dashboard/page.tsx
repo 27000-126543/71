@@ -268,20 +268,26 @@ export default function DashboardPage() {
               <div className="text-sm font-medium text-gray-300 mb-2">授信使用率</div>
               <div className="text-xs text-gold-300 font-semibold">{formatPercent(data.creditUtilizationRate)}</div>
             </div>
-            <div className="flex items-center justify-between">
-              <GaugeChart value={data.creditUtilizationRate} darkMode size="md" />
-              <div className="space-y-2 text-sm">
-                <div className="text-gray-400">
-                  总额度: <span className="text-white font-semibold">{formatCurrency(data.totalCreditLimit, 0)}</span>
-                </div>
-                <div className="text-gray-400">
-                  已用: <span className="text-gold-300 font-semibold">{formatCurrency(data.usedCreditLimit, 0)}</span>
-                </div>
-                <div className="text-gray-400">
-                  剩余: <span className="text-emerald-400 font-semibold">{formatCurrency(data.availableCreditLimit, 0)}</span>
+            {data.totalCreditLimit > 0 ? (
+              <div className="flex items-center justify-between">
+                <GaugeChart value={data.creditUtilizationRate} darkMode size="md" />
+                <div className="space-y-2 text-sm">
+                  <div className="text-gray-400">
+                    总额度: <span className="text-white font-semibold">{formatCurrency(data.totalCreditLimit, 0)}</span>
+                  </div>
+                  <div className="text-gray-400">
+                    已用: <span className="text-gold-300 font-semibold">{formatCurrency(data.usedCreditLimit, 0)}</span>
+                  </div>
+                  <div className="text-gray-400">
+                    剩余: <span className="text-emerald-400 font-semibold">{formatCurrency(data.availableCreditLimit, 0)}</span>
+                  </div>
                 </div>
               </div>
-            </div>
+            ) : (
+              <div className="flex items-center justify-center h-[140px] text-gray-400 text-sm">
+                本时间段暂无授信使用数据
+              </div>
+            )}
           </div>
           <KpiCard
             title="逾期率"
